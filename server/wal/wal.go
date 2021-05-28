@@ -96,7 +96,7 @@ type WAL struct {
 	fp    *filePipeline
 
 	pmemaware bool // set this field to true if the WAL is using pmem
-	pmem       *pmemutil.Pmem
+	plp       pmemutil.Pmemlogpool
 }
 
 // Create creates a WAL ready for appending records. The given metadata is
@@ -110,7 +110,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
-	pmemaware := true
+	pmemaware := false
 	if pmemaware {
 		w := &WAL{
 			lg:        lg,
@@ -131,7 +131,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 			}
 			return nil, err
 		}
-		w.pmem = pw.GetLogPool()
+		w.plp = pw.GetLogPool()
 		w.encoder = newPmemEncoder(pw, 0)
 
 		// TODO Very hacky way - the file is not locked but we are using it as locked file, must be fixed
@@ -935,7 +935,7 @@ func (w *WAL) Close() error {
 	}
 
 	if w.pmemaware {
-		pmemutil.Close(w.pmem.Plp)
+		pmemutil.Close(w.plp)
 		return nil
 	}
 
