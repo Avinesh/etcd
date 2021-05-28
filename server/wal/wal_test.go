@@ -29,6 +29,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/pkg/v3/pbutil"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
@@ -93,8 +94,9 @@ func TestNew(t *testing.T) {
 		t.Fatalf("err = %v, want nil", err)
 	}
 	e.flush()
-	if !bytes.Equal(gd, wb.Bytes()) {
-		t.Errorf("data = %v, want %v", gd, wb.Bytes())
+	tf := pmemutil.Print(w.pmem)
+	if !bytes.Equal(tf, wb.Bytes()) {
+		t.Errorf("data = %v, want %v", tf, wb.Bytes())
 	}
 }
 

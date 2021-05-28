@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
 	"go.etcd.io/etcd/pkg/v3/pbutil"
 	"go.etcd.io/etcd/raft/v3"
@@ -93,6 +94,9 @@ type WAL struct {
 
 	locks []*fileutil.LockedFile // the locked files the WAL holds (the name is increasing)
 	fp    *filePipeline
+
+	pmemaware bool // set this field to true if the WAL is using pmem
+	pmem       *pmemutil.Pmem
 }
 
 // Create creates a WAL ready for appending records. The given metadata is
@@ -106,7 +110,49 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if lg == nil {
 		lg = zap.NewNop()
 	}
+	pmemaware := true
+	if pmemaware {
+		w := &WAL{
+			lg:        lg,
+			dir:       dirpath,
+			metadata:  metadata,
+			pmemaware: pmemaware,
+		}
+		p := filepath.Join(dirpath, walName(0, 0))
+		pw := pmemutil.Newpmemwriter()
+		err := pw.InitiatePmemLogPool(p)
+		if err != nil {
+			if lg != nil {
+				lg.Warn(
+					"failed to create an initial WAL file",
+					zap.String("path", p),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
+		w.pmem = pw.GetLogPool()
+		w.encoder = newPmemEncoder(pw, 0)
 
+		// TODO Very hacky way - the file is not locked but we are using it as locked file, must be fixed
+		f, err := os.Open(p) // For read access.
+		if err != nil {
+			return nil, err
+		}
+		l := &fileutil.LockedFile{f}
+
+		w.locks = append(w.locks, l)
+		if err = w.saveCrc(0); err != nil {
+			return nil, err
+		}
+		if err = w.encoder.encode(&walpb.Record{Type: metadataType, Data: metadata}); err != nil {
+			return nil, err
+		}
+		if err = w.SaveSnapshot(walpb.Snapshot{}); err != nil {
+			return nil, err
+		}
+		return w, nil
+	}
 	// keep temporary wal directory so WAL initialization appears atomic
 	tmpdirpath := filepath.Clean(dirpath) + ".tmp"
 	if fileutil.Exist(tmpdirpath) {
@@ -755,6 +801,9 @@ func (w *WAL) cut() error {
 	if err = os.Rename(newTail.Name(), fpath); err != nil {
 		return err
 	}
+	if w.pmemaware {
+		return nil
+	}
 	start := time.Now()
 	if err = fileutil.Fsync(w.dirFile); err != nil {
 		return err
@@ -883,6 +932,11 @@ func (w *WAL) Close() error {
 		if err := l.Close(); err != nil {
 			w.lg.Error("failed to close WAL", zap.Error(err))
 		}
+	}
+
+	if w.pmemaware {
+		pmemutil.Close(w.pmem.Plp)
+		return nil
 	}
 
 	return w.dirFile.Close()
