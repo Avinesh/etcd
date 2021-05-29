@@ -96,7 +96,6 @@ type WAL struct {
 	fp    *filePipeline
 
 	pmemaware bool // set this field to true if the WAL is using pmem
-	plp       pmemutil.Pmemlogpool
 }
 
 // Create creates a WAL ready for appending records. The given metadata is
@@ -149,8 +148,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if pmemaware {
 		w.pmemaware = pmemaware
 
-		pw := pmemutil.Newpmemwriter()
-		err = pw.InitiatePmemLogPool(p, SegmentSizeBytes)
+		err = pmemutil.InitiatePmemLogPool(p, SegmentSizeBytes)
 		if err != nil {
 			if lg != nil {
 				lg.Warn(
@@ -161,8 +159,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 			}
 			return nil, err
 		}
-		w.plp = pw.GetLogPool()
-		w.encoder = newPmemEncoder(pw, 0)
+		w.encoder = newPmemEncoder(p, 0)
 
 		// TODO Very hacky way - the file is probably locked twice, must be fixed
 		f, err = fileutil.LockFile(p, os.O_RDWR, fileutil.PrivateFileMode)
@@ -278,9 +275,6 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	walFsyncSec.Observe(time.Since(start).Seconds())
 	if err = dirCloser(); err != nil {
 		return nil, err
-	}
-	if w.pmemaware {
-		pmemutil.Close(w.plp)
 	}
 
 	return w, nil
@@ -450,20 +444,14 @@ func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int,
 			}
 			ls = append(ls, l)
 			if pmemaware {
-				pr, err := pmemutil.OpenRead(p)
-				if err != nil {
-					return nil, nil, nil, err
-				}
+				pr := pmemutil.OpenForRead(p)
 				rcs = append(rcs, pr)
 			} else {
 				rcs = append(rcs, l)
 			}
 		} else {
 			if pmemaware {
-				rf, err := pmemutil.OpenRead(p)
-				if err != nil {
-					return nil, nil, nil, err
-				}
+				rf := pmemutil.OpenForRead(p)
 				rcs = append(rcs, rf)
 			} else {
 				rf, err := os.OpenFile(p, os.O_RDONLY, fileutil.PrivateFileMode)
@@ -612,12 +600,7 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 	if w.tail() != nil {
 		// create encoder (chain crc with the decoder), enable appending
 		if w.pmemaware {
-			var pw *pmemutil.Pmemwriter
-			pw, err = pmemutil.OpenWrite(w.tail().Name())
-			if err != nil {
-				return
-			}
-			w.encoder = newPmemEncoder(pw, w.decoder.lastCRC())
+			w.encoder = newPmemEncoder(filepath.Join(w.dir, w.tail().Name()), w.decoder.lastCRC())
 		} else {
 			w.encoder, err = newFileEncoder(w.tail().File, w.decoder.lastCRC())
 			if err != nil {
@@ -970,12 +953,6 @@ func (w *WAL) Close() error {
 			w.lg.Error("failed to close WAL", zap.Error(err))
 		}
 	}
-
-	/*if w.pmemaware {
-		pmemutil.Close(w.plp)
-		return nil
-	}*/
-
 	return w.dirFile.Close()
 }
 
@@ -1024,11 +1001,12 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
         var curOff int64
         var err    error
         if w.pmemaware {
-		pr, err := pmemutil.OpenRead(filepath.Join(w.dir, w.tail().Name()))
+		pr := pmemutil.OpenForRead(filepath.Join(w.dir, w.tail().Name()))
+		plp, err := pr.GetLogPool()
 		if err != nil {
 			return err
 		}
-		plp := pr.GetLogPool()
+
                 curOff = pmemutil.Seek(plp)
         } else {
                 curOff, err = w.tail().Seek(0, io.SeekCurrent)
