@@ -29,8 +29,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"go.etcd.io/etcd/client/pkg/v3/fileutil"
-	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/pkg/v3/pbutil"
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
 	"go.uber.org/zap/zaptest"
@@ -61,29 +61,43 @@ func TestNew(t *testing.T) {
 	}
 	defer w.Close()
 
-	// file is preallocated to segment size; only read data written by wal
-	off, err := w.tail().Seek(0, io.SeekCurrent)
+	var gd []byte
+	pmemaware, err := pmemutil.IsPmemTrue(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	gd := make([]byte, off)
-	pmemaware, err := pmemutil.IsPmemTrue(p)
-	if err != nil {
-                t.Fatal(err)
-        }
 	pmemaware = true
+
+	var f io.ReadCloser
 	if pmemaware {
-		gd = pmemutil.Print(w.plp)
+		pr, err := pmemutil.OpenRead(filepath.Join(p, filepath.Base(w.tail().Name())))
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		plp := pr.GetLogPool()
+		// file is preallocated to segment size; only read data written by wal
+		off := pmemutil.Seek(plp)
+		gd = make([]byte, off)
+
+		f = pr
 	} else {
-	f, err := os.Open(filepath.Join(p, filepath.Base(w.tail().Name())))
-	if err != nil {
-		t.Fatal(err)
+		// file is preallocated to segment size; only read data written by wal
+		off, err := w.tail().Seek(0, io.SeekCurrent)
+		if err != nil {
+			t.Fatal(err)
+		}
+		gd = make([]byte, off)
+
+		f, err = os.Open(filepath.Join(p, filepath.Base(w.tail().Name())))
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 	defer f.Close()
 	if _, err = io.ReadFull(f, gd); err != nil {
 		t.Fatalf("err = %v, want nil", err)
 	}
-}
 
 	var wb bytes.Buffer
 	e := newEncoder(&wb, 0, 0)

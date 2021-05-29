@@ -145,7 +145,7 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
 	}
-	// pmemaware = true
+	pmemaware = true
 	if pmemaware {
 		w.pmemaware = pmemaware
 
@@ -278,6 +278,9 @@ func Create(lg *zap.Logger, dirpath string, metadata []byte) (*WAL, error) {
 	walFsyncSec.Observe(time.Since(start).Seconds())
 	if err = dirCloser(); err != nil {
 		return nil, err
+	}
+	if w.pmemaware {
+		pmemutil.Close(w.plp)
 	}
 
 	return w, nil
@@ -433,7 +436,7 @@ func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int,
 		return nil, nil, nil, errors.New("Temporary file in pmem could not be removed during openWALFiles")
 	}
 
-	//pmemaware = true
+	pmemaware = true
 	rcs := make([]io.ReadCloser, 0)
 	rs := make([]io.Reader, 0)
 	ls := make([]*fileutil.LockedFile, 0)
@@ -968,10 +971,10 @@ func (w *WAL) Close() error {
 		}
 	}
 
-	if w.pmemaware {
+	/*if w.pmemaware {
 		pmemutil.Close(w.plp)
 		return nil
-	}
+	}*/
 
 	return w.dirFile.Close()
 }
@@ -1021,8 +1024,12 @@ func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
         var curOff int64
         var err    error
         if w.pmemaware {
-                curOff = pmemutil.Seek(w.plp)
-		fmt.Println("Douchebag")
+		pr, err := pmemutil.OpenRead(filepath.Join(w.dir, w.tail().Name()))
+		if err != nil {
+			return err
+		}
+		plp := pr.GetLogPool()
+                curOff = pmemutil.Seek(plp)
         } else {
                 curOff, err = w.tail().Seek(0, io.SeekCurrent)
                 if err != nil {
@@ -1096,4 +1103,3 @@ func closeAll(lg *zap.Logger, rcs ...io.ReadCloser) error {
 	}
 	return errors.New(strings.Join(stringArr, ", "))
 }
-

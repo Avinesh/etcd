@@ -34,9 +34,9 @@ type filePipeline struct {
 	// size of files to make, in bytes
 	size int64
 	// count number of files generated
-	count int
-	is_pmem bool
-	plp       pmemutil.Pmemlogpool
+	count      int
+	is_pmem    bool
+	plp        pmemutil.Pmemlogpool
 	pmemwriter *pmemutil.Pmemwriter
 
 	filec chan *fileutil.LockedFile
@@ -57,13 +57,13 @@ func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
 		lg = zap.NewNop()
 	}
 	fp := &filePipeline{
-		lg:    lg,
-		dir:   dir,
+		lg:      lg,
+		dir:     dir,
 		is_pmem: is_pmem,
-		size:  fileSize,
-		filec: make(chan *fileutil.LockedFile),
-		errc:  make(chan error, 1),
-		donec: make(chan struct{}),
+		size:    fileSize,
+		filec:   make(chan *fileutil.LockedFile),
+		errc:    make(chan error, 1),
+		donec:   make(chan struct{}),
 	}
 	go fp.run()
 	return fp
@@ -150,4 +150,3 @@ func (fp *filePipeline) run() {
 		}
 	}
 }
-
