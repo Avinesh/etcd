@@ -428,6 +428,12 @@ func selectWALFiles(lg *zap.Logger, dirpath string, snap walpb.Snapshot) ([]stri
 }
 
 func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int, write bool) ([]io.Reader, []*fileutil.LockedFile, func() error, error) {
+	pmemaware, err := pmemutil.IsPmemTrue(dirpath)
+	if err != nil {
+		return nil, nil, nil, errors.New("Temporary file in pmem could not be removed during openWALFiles")
+	}
+
+	//pmemaware = true
 	rcs := make([]io.ReadCloser, 0)
 	rs := make([]io.Reader, 0)
 	ls := make([]*fileutil.LockedFile, 0)
@@ -436,24 +442,40 @@ func openWALFiles(lg *zap.Logger, dirpath string, names []string, nameIndex int,
 		if write {
 			l, err := fileutil.TryLockFile(p, os.O_RDWR, fileutil.PrivateFileMode)
 			if err != nil {
-				closeAll(lg, rcs...)
+				closeAll(rcs...)
 				return nil, nil, nil, err
 			}
 			ls = append(ls, l)
-			rcs = append(rcs, l)
+			if pmemaware {
+				pr, err := pmemutil.OpenRead(p)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				rcs = append(rcs, pr)
+			} else {
+				rcs = append(rcs, l)
+			}
 		} else {
-			rf, err := os.OpenFile(p, os.O_RDONLY, fileutil.PrivateFileMode)
-			if err != nil {
-				closeAll(lg, rcs...)
-				return nil, nil, nil, err
+			if pmemaware {
+				rf, err := pmemutil.OpenRead(p)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				rcs = append(rcs, rf)
+			} else {
+				rf, err := os.OpenFile(p, os.O_RDONLY, fileutil.PrivateFileMode)
+				if err != nil {
+					closeAll(rcs...)
+					return nil, nil, nil, err
+				}
+				rcs = append(rcs, rf)
 			}
 			ls = append(ls, nil)
-			rcs = append(rcs, rf)
 		}
 		rs = append(rs, rcs[len(rcs)-1])
 	}
 
-	closer := func() error { return closeAll(lg, rcs...) }
+	closer := func() error { return closeAll(rcs...) }
 
 	return rs, ls, closer, nil
 }
@@ -586,9 +608,18 @@ func (w *WAL) ReadAll() (metadata []byte, state raftpb.HardState, ents []raftpb.
 
 	if w.tail() != nil {
 		// create encoder (chain crc with the decoder), enable appending
-		w.encoder, err = newFileEncoder(w.tail().File, w.decoder.lastCRC())
-		if err != nil {
-			return
+		if w.pmemaware {
+			var pw *pmemutil.Pmemwriter
+			pw, err = pmemutil.OpenWrite(w.tail().Name())
+			if err != nil {
+				return
+			}
+			w.encoder = newPmemEncoder(pw, w.decoder.lastCRC())
+		} else {
+			w.encoder, err = newFileEncoder(w.tail().File, w.decoder.lastCRC())
+			if err != nil {
+				return
+			}
 		}
 	}
 	w.decoder = nil
@@ -967,43 +998,45 @@ func (w *WAL) saveState(s *raftpb.HardState) error {
 }
 
 func (w *WAL) Save(st raftpb.HardState, ents []raftpb.Entry) error {
-	w.mu.Lock()
-	defer w.mu.Unlock()
+        w.mu.Lock()
+        defer w.mu.Unlock()
 
-	// short cut, do not call sync
-	if raft.IsEmptyHardState(st) && len(ents) == 0 {
-		return nil
-	}
+        // short cut, do not call sync
+        if raft.IsEmptyHardState(st) && len(ents) == 0 {
+                return nil
+        }
 
-	mustSync := raft.MustSync(st, w.state, len(ents))
+        mustSync := raft.MustSync(st, w.state, len(ents))
 
-	// TODO(xiangli): no more reference operator
-	for i := range ents {
-		if err := w.saveEntry(&ents[i]); err != nil {
-			return err
-		}
-	}
-	if err := w.saveState(&st); err != nil {
-		return err
-	}
-	var curOff int64
-	var err    error
-	if w.pmemaware {
-		curOff = pmemutil.Seek(w.plp)
-	} else {
-		curOff, err = w.tail().Seek(0, io.SeekCurrent)
-	if err != nil {
-		return err
-	}
-}
-	if curOff < SegmentSizeBytes {
-		if mustSync {
-			return w.sync()
-		}
-		return nil
-	}
+        // TODO(xiangli): no more reference operator
+        for i := range ents {
+                if err := w.saveEntry(&ents[i]); err != nil {
+                        return err
+                }
+        }
+        if err := w.saveState(&st); err != nil {
+                return err
+        }
 
-	return w.cut()
+        var curOff int64
+        var err    error
+        if w.pmemaware {
+                curOff = pmemutil.Seek(w.plp)
+		fmt.Println("Douchebag")
+        } else {
+                curOff, err = w.tail().Seek(0, io.SeekCurrent)
+                if err != nil {
+                        return err
+                }
+        }
+        if curOff < SegmentSizeBytes {
+                if mustSync {
+                        return w.sync()
+                }
+                return nil
+        }
+
+        return w.cut()
 }
 
 func (w *WAL) SaveSnapshot(e walpb.Snapshot) error {
