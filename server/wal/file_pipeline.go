@@ -34,8 +34,8 @@ type filePipeline struct {
 	// size of files to make, in bytes
 	size int64
 	// count number of files generated
-	count      int
-	is_pmem    bool
+	count  int
+	isPmem bool
 
 	filec chan *fileutil.LockedFile
 	errc  chan error
@@ -44,9 +44,9 @@ type filePipeline struct {
 
 func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
 	// Check if the current location is in pmem
-	is_pmem := false
-	is_pmem, _ = pmemutil.IsPmemTrue(dir)
-	is_pmem = true
+	isPmem := false
+	isPmem, _ = pmemutil.IsPmemTrue(dir)
+	isPmem = true
 	/*if err != nil {
 		return nil, errors.New("Temporary file in pmem could not be removed")
 	}*/
@@ -57,7 +57,7 @@ func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
 	fp := &filePipeline{
 		lg:      lg,
 		dir:     dir,
-		is_pmem: is_pmem,
+		isPmem: isPmem,
 		size:    fileSize,
 		filec:   make(chan *fileutil.LockedFile),
 		errc:    make(chan error, 1),
@@ -86,7 +86,7 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 
 	// count % 2 so this file isn't the same as the one last published
 	fpath := filepath.Join(fp.dir, fmt.Sprintf("%d.tmp", fp.count%2))
-	if !fp.is_pmem {
+	if !fp.isPmem {
 		if f, err = fileutil.LockFile(fpath, os.O_CREATE|os.O_WRONLY, fileutil.PrivateFileMode); err != nil {
 			return nil, err
 		}
@@ -100,7 +100,6 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 			return nil, err
 		}
 	} else {
-		fmt.Println("File size: ", fp.size)
 		err = pmemutil.InitiatePmemLogPool(fpath, fp.size)
 		if err != nil {
 			if fp.lg != nil {
@@ -112,7 +111,6 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 			}
 			return nil, err
 		}
-		fmt.Println("fpath-",fpath)
 
 		// TODO Very hacky way - the file is probably locked twice, must be fixed
 		f, err = fileutil.LockFile(fpath, os.O_RDWR, fileutil.PrivateFileMode)
@@ -134,7 +132,6 @@ func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
 func (fp *filePipeline) run() {
 	defer close(fp.errc)
 	for {
-		fmt.Println("I am here inside run")
 		f, err := fp.alloc()
 		if err != nil {
 			fp.errc <- err
@@ -144,7 +141,7 @@ func (fp *filePipeline) run() {
 		case fp.filec <- f:
 		case <-fp.donec:
 			os.Remove(f.Name())
-			if !fp.is_pmem {
+			if !fp.isPmem {
 				f.Close()
 			}
 			return
