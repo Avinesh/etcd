@@ -23,6 +23,7 @@
 # to run only "TestNew", set "TESTCASE="\bTestNew\b""
 #
 # $ PASSES=unit PKG=./wal TESTCASE=TestNew TIMEOUT=1m ./test.sh
+# $ PASSES=unit PKG=./wal PMEM=True TESTCASE=TestNew TIMEOUT=1m ./test.sh
 # $ PASSES=unit PKG=./wal TESTCASE="\bTestNew\b" TIMEOUT=1m ./test.sh
 # $ PASSES=integration PKG=./client/integration TESTCASE="\bTestV2NoRetryEOF\b" TIMEOUT=1m ./test.sh
 #
@@ -49,6 +50,10 @@ source ./build.sh
 
 PASSES=${PASSES:-"fmt bom dep build unit"}
 PKG=${PKG:-}
+PMEM=${PMEM:-}
+if [ -z "${PMEM}" ]; then
+	PMEM=false
+fi
 
 if [ -z "$GOARCH" ]; then
   GOARCH=$(go env GOARCH);
@@ -89,6 +94,9 @@ function build_pass {
 
 # run_unit_tests [pkgs] runs unit tests for a current module and givesn set of [pkgs]
 function run_unit_tests {
+  if [ "${PMEM}" ]; then
+    GO_TEST_FLAG="-tags='pmem'"
+  fi
   local pkgs="${1:-./...}"
   shift 1
   # shellcheck disable=SC2086
