@@ -13,6 +13,7 @@ VERSION_SYMBOL="${ROOT_MODULE}/api/v3/version.GitSHA"
 # shellcheck disable=SC2206
 GO_LDFLAGS=(${GO_LDFLAGS} "-X=${VERSION_SYMBOL}=${GIT_SHA}")
 GO_BUILD_ENV=("CGO_ENABLED=0" "GO_BUILD_FLAGS=${GO_BUILD_FLAGS}" "GOOS=${GOOS}" "GOARCH=${GOARCH}")
+GO_BUILD_ENV_1=("CGO_ENABLED=1" "GO_BUILD_FLAGS=${GO_BUILD_FLAGS}" "GOOS=${GOOS}" "GOARCH=${GOARCH}")
 
 # enable/disable failpoints
 toggle_failpoints() {
@@ -41,7 +42,7 @@ etcd_build() {
     cd ./server
     # Static compilation is useful when etcd is run in a container. $GO_BUILD_FLAGS is OK
     # shellcheck disable=SC2086
-    run env "${GO_BUILD_ENV[@]}" go build $GO_BUILD_FLAGS \
+    run env "${GO_BUILD_ENV_1[@]}" go build $GO_BUILD_FLAGS \
       -installsuffix=cgo \
       "-ldflags=${GO_LDFLAGS[*]}" \
       -o="../${out}/etcd" . || return 2
@@ -61,7 +62,7 @@ etcd_build() {
   # shellcheck disable=SC2086
   (
     cd ./etcdctl
-    run env GO_BUILD_FLAGS="${GO_BUILD_FLAGS}" "${GO_BUILD_ENV[@]}" go build $GO_BUILD_FLAGS \
+    run env GO_BUILD_FLAGS="${GO_BUILD_FLAGS}" "${GO_BUILD_ENV_1[@]}" go build $GO_BUILD_FLAGS \
       -installsuffix=cgo \
       "-ldflags=${GO_LDFLAGS[*]}" \
       -o="../${out}/etcdctl" . || return 2
