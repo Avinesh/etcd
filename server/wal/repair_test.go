@@ -19,12 +19,12 @@ import (
 	"io"
 	"io/ioutil"
 	"os"
-	"testing"
 	"path/filepath"
+	"testing"
 
+	"go.etcd.io/etcd/pkg/pmemutil"
 	"go.etcd.io/etcd/raft/v3/raftpb"
 	"go.etcd.io/etcd/server/v3/wal/walpb"
-	"go.etcd.io/etcd/pkg/pmemutil"
 
 	"go.uber.org/zap"
 )
@@ -75,13 +75,13 @@ func testRepair(t *testing.T, ents [][]raftpb.Entry, corrupt corruptFunc, expect
 
 	var offset int64
 	if w.pmemaware {
-                p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
-                pr := pmemutil.OpenForRead(p)
-                plp, err := pr.GetLogPool()
-                if err != nil {
-                        t.Fatal(err)
-                }
-                offset = pmemutil.Seek(plp)
+		p := filepath.Join(w.dir, filepath.Base(w.tail().Name()))
+		pr := pmemutil.OpenForRead(p)
+		plp, err := pr.GetLogPool()
+		if err != nil {
+			t.Fatal(err)
+		}
+		offset = pmemutil.Seek(plp)
 	} else {
 		offset, err = w.tail().Seek(0, io.SeekCurrent)
 		if err != nil {
@@ -168,13 +168,13 @@ func TestRepairWriteTearLast(t *testing.T) {
 			return fmt.Errorf("got offset %d, expected >1024", offset)
 		}
 		if pmemaware {
-			 return pmemutil.WriteInMiddle(f.Name(), make([]byte, offset-1024), 1024)
-                } else {
-		if terr := f.Truncate(1024); terr != nil {
-			return terr
+			return pmemutil.WriteInMiddle(f.Name(), make([]byte, offset-1024), 1024)
+		} else {
+			if terr := f.Truncate(1024); terr != nil {
+				return terr
+			}
+			return f.Truncate(offset)
 		}
-		return f.Truncate(offset)
-                }
 	}
 	testRepair(t, makeEnts(50), corruptf, 40)
 }
@@ -246,13 +246,13 @@ func TestRepairFailDeleteDir(t *testing.T) {
 	}
 	if pmemaware {
 		if terr := pmemutil.Resize(f.Name(), 20); terr != nil {
-                t.Fatal(err)
-        }
-} else {
-	if terr := f.Truncate(20); terr != nil {
-		t.Fatal(err)
+			t.Fatal(err)
+		}
+	} else {
+		if terr := f.Truncate(20); terr != nil {
+			t.Fatal(err)
+		}
 	}
-}
 	f.Close()
 
 	w, err = Open(zap.NewExample(), p, walpb.Snapshot{})
