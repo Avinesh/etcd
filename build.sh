@@ -43,6 +43,7 @@ etcd_build() {
     # Static compilation is useful when etcd is run in a container. $GO_BUILD_FLAGS is OK
     # shellcheck disable=SC2086
     run env "${GO_BUILD_ENV_1[@]}" go build $GO_BUILD_FLAGS \
+      -tags pmem \
       -installsuffix=cgo \
       "-ldflags=${GO_LDFLAGS[*]}" \
       -o="../${out}/etcd" . || return 2
@@ -63,6 +64,7 @@ etcd_build() {
   (
     cd ./etcdctl
     run env GO_BUILD_FLAGS="${GO_BUILD_FLAGS}" "${GO_BUILD_ENV_1[@]}" go build $GO_BUILD_FLAGS \
+      -tags pmem \
       -installsuffix=cgo \
       "-ldflags=${GO_LDFLAGS[*]}" \
       -o="../${out}/etcdctl" . || return 2

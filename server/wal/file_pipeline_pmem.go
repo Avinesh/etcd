@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+// +build pmem
+
 package wal
 
 import (
@@ -19,7 +21,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"go.etcd.io/etcd/client/pkg/v3/fileutil"
+	"go.etcd.io/etcd/pkg/fileutil"
+	"go.etcd.io/etcd/pkg/pmemutil"
 
 	"go.uber.org/zap"
 )
@@ -33,7 +36,8 @@ type filePipeline struct {
 	// size of files to make, in bytes
 	size int64
 	// count number of files generated
-	count int
+	count  int
+	isPmem bool
 
 	filec chan *fileutil.LockedFile
 	errc  chan error
@@ -41,16 +45,18 @@ type filePipeline struct {
 }
 
 func newFilePipeline(lg *zap.Logger, dir string, fileSize int64) *filePipeline {
-	if lg == nil {
-		lg = zap.NewNop()
-	}
+
+	// Check if the current location is in pmem
+	isPmem, _ := pmemutil.IsPmemTrue(dir)
+
 	fp := &filePipeline{
-		lg:    lg,
-		dir:   dir,
-		size:  fileSize,
-		filec: make(chan *fileutil.LockedFile),
-		errc:  make(chan error, 1),
-		donec: make(chan struct{}),
+		lg:     lg,
+		dir:    dir,
+		isPmem: isPmem,
+		size:   fileSize,
+		filec:  make(chan *fileutil.LockedFile),
+		errc:   make(chan error, 1),
+		donec:  make(chan struct{}),
 	}
 	go fp.run()
 	return fp
@@ -72,15 +78,48 @@ func (fp *filePipeline) Close() error {
 }
 
 func (fp *filePipeline) alloc() (f *fileutil.LockedFile, err error) {
+
 	// count % 2 so this file isn't the same as the one last published
 	fpath := filepath.Join(fp.dir, fmt.Sprintf("%d.tmp", fp.count%2))
-	if f, err = fileutil.LockFile(fpath, os.O_CREATE|os.O_WRONLY, fileutil.PrivateFileMode); err != nil {
-		return nil, err
-	}
-	if err = fileutil.Preallocate(f.File, fp.size, true); err != nil {
-		fp.lg.Error("failed to preallocate space when creating a new WAL", zap.Int64("size", fp.size), zap.Error(err))
-		f.Close()
-		return nil, err
+
+	if !fp.isPmem {
+		if f, err = fileutil.LockFile(fpath, os.O_CREATE|os.O_WRONLY, fileutil.PrivateFileMode); err != nil {
+			return nil, err
+		}
+		if err = fileutil.Preallocate(f.File, fp.size, true); err != nil {
+			if fp.lg != nil {
+				fp.lg.Warn("failed to preallocate space when creating a new WAL", zap.Int64("size", fp.size), zap.Error(err))
+			} else {
+				plog.Errorf("failed to allocate space when creating new wal file (%v)", err)
+			}
+			f.Close()
+			return nil, err
+		}
+	} else {
+		err = pmemutil.InitiatePmemLogPool(fpath, fp.size)
+		if err != nil {
+			if fp.lg != nil {
+				fp.lg.Warn(
+					"failed to create an initial WAL file in pmem",
+					zap.String("path", fpath),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
+
+		// TODO Very hacky way - the file is probably locked twice, must be fixed
+		f, err = fileutil.LockFile(fpath, os.O_RDWR, fileutil.PrivateFileMode)
+		if err != nil {
+			if fp.lg != nil {
+				fp.lg.Warn(
+					"failed to flock an initial WAL file",
+					zap.String("path", fpath),
+					zap.Error(err),
+				)
+			}
+			return nil, err
+		}
 	}
 	fp.count++
 	return f, nil
@@ -98,7 +137,9 @@ func (fp *filePipeline) run() {
 		case fp.filec <- f:
 		case <-fp.donec:
 			os.Remove(f.Name())
-			f.Close()
+			if !fp.isPmem {
+				f.Close()
+			}
 			return
 		}
 	}
